@@ -500,7 +500,9 @@ static inline size_t zcbor_flags_to_states(size_t num_flags)
 #define ZCBOR_FLAG_STATES(n_flags) 0
 #endif
 
-size_t strnlen(const char *, size_t);
+#if !defined(_MSC_VER) /* #CUSTOM@NDRS */
+size_t strnlen(const char* s, size_t maxlen);
+#endif
 
 #ifdef __cplusplus
 }
