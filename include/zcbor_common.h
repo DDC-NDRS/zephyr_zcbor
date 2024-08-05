@@ -145,12 +145,28 @@ struct zcbor_state_constant {
 #ifdef ZCBOR_STOP_ON_ERROR
 	bool stop_on_error;
 #endif
+	bool enforce_canonical; /**< Fail when decoding if data is non-canonical.
+	                             The default/initial value follows ZCBOR_CANONICAL */
 	bool manually_process_elem; /**< Whether an (unordered map) element should be automatically
 	                                 marked as processed when found via @ref zcbor_search_map_key. */
 #ifdef ZCBOR_MAP_SMART_SEARCH
 	uint8_t *map_search_elem_state_end; /**< The end of the @ref map_search_elem_state buffer. */
 #endif
 };
+
+#ifdef ZCBOR_CANONICAL
+#define ZCBOR_ENFORCE_CANONICAL_DEFAULT true
+#else
+#define ZCBOR_ENFORCE_CANONICAL_DEFAULT false
+#endif
+
+#define ZCBOR_ENFORCE_CANONICAL(state) (state->constant_state \
+	? state->constant_state->enforce_canonical : ZCBOR_ENFORCE_CANONICAL_DEFAULT)
+
+#define ZCBOR_MANUALLY_PROCESS_ELEM_DEFAULT false
+
+#define ZCBOR_MANUALLY_PROCESS_ELEM(state) (state->constant_state \
+	? state->constant_state->manually_process_elem : ZCBOR_MANUALLY_PROCESS_ELEM_DEFAULT)
 
 /** Function pointer type used with zcbor_multi_decode.
  *
@@ -236,6 +252,8 @@ do { \
 #define ZCBOR_VALUE_IS_INDEFINITE_LENGTH 31 ///! The list or map has indefinite length, and will instead be terminated by a 0xFF token.
 
 #define ZCBOR_BOOL_TO_SIMPLE ((uint8_t)20) ///! In CBOR, false/true have the values 20/21
+#define ZCBOR_NIL_VAL ((uint8_t)22)
+#define ZCBOR_UNDEF_VAL ((uint8_t)23)
 
 #define ZCBOR_FLAG_RESTORE 1UL ///! Restore from the backup. Overwrite the current state with the state from the backup.
 #define ZCBOR_FLAG_CONSUME 2UL ///! Consume the backup. Remove the backup from the stack of backups.
@@ -263,7 +281,8 @@ do { \
 #define ZCBOR_ERR_ELEMS_NOT_PROCESSED 18
 #define ZCBOR_ERR_NOT_AT_END 19
 #define ZCBOR_ERR_MAP_FLAGS_NOT_AVAILABLE 20
-#define ZCBOR_ERR_INVALID_VALUE_ENCODING 21 ///! When ZCBOR_CANONICAL is defined, and the incoming data is not encoded with minimal length.
+#define ZCBOR_ERR_INVALID_VALUE_ENCODING 21 ///! When ZCBOR_CANONICAL is defined, and the incoming data is not encoded with minimal length, or uses indefinite length array.
+#define ZCBOR_ERR_CONSTANT_STATE_MISSING 22
 #define ZCBOR_ERR_UNKNOWN 31
 
 /** The largest possible elem_count. */
@@ -455,6 +474,18 @@ size_t zcbor_header_len(uint64_t value);
 
 /** Like @ref zcbor_header_len but for integer of any size <= 8. */
 size_t zcbor_header_len_ptr(const void *const value, size_t value_len);
+
+/** If a string (header + payload) is encoded into the rest of the payload, how long would it be?
+ *
+ *  Note that a string with this length doesn't necessarily fill the rest of the
+ *  payload. For some payload lengths, e.g. 25, it's impossible to encode a
+ *  string of that total length.
+ *
+ *  @param[in] state  The current state.
+ *
+ *  @return  The length of the string (payload, not including header) in bytes.
+ */
+size_t zcbor_remaining_str_len(zcbor_state_t *state);
 
 /** Convert a float16 value to float32.
  *

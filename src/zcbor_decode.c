@@ -103,55 +103,80 @@ static void endian_copy(uint8_t *dst, const uint8_t *src, size_t src_len)
 }
 
 
-/** Get a single value.
+/** Get a single value. I.e. a number or simple value, or a list/map/string header.
  *
- * @details @p ppayload must point to the header byte. This function will
+ * @details @p state->payload must point to the header byte. This function will
  *          retrieve the value (either from within the additional info, or from
  *          the subsequent bytes) and return it in the result. The result can
- *          have arbitrary length.
+ *          have arbitrary length within 1-8 bytes.
  *
  *          The function will also validate
- *           - Min/max constraints on the value.
- *           - That @p payload doesn't overrun past @p payload_end.
- *           - That @p elem_count has not been exhausted.
+ *           - That @p state->payload doesn't overrun past @p state->payload_end.
+ *           - That @p state->elem_count has not been exhausted.
+ *           - That the value is encoded in a canonical way (if enforce_canonical
+ *             is enabled).
  *
- *          @p ppayload and @p elem_count are updated if the function
- *          succeeds. If not, they are left unchanged.
+ *          @p state->payload and @p state->elem_count are updated if the function
+ *          succeeds. If not, they are left unchanged. @p state->payload is updated
+ *          to point to the next byte after the value (for a list/map/tstr/bstr
+ *          this means the first byte of the list/string payload).
+ *          @p state->elem_count is decremented by one.
+ *
+ *          @p state->payload_bak is updated to point to the start of the value.
  *
  *          CBOR values are always big-endian, so this function converts from
  *          big to little-endian if necessary (@ref ZCBOR_BIG_ENDIAN).
+ *
+ * @param state[inout] The current state of the decoding.
+ * @param result[out]  Pointer to an integer where the result will be stored.
+ * @param result_len   The size of the result integer.
+ * @param indefinite_length_array[inout]
+ *                     As input: NULL if an indefinite length value is not expected.
+ *                     As output: Whether the value signifies an indefinite length array.
+ *
+ * @return             true if the value was successfully extracted, false otherwise.
  */
 static bool value_extract(zcbor_state_t *state,
-		void *const result, size_t result_len)
+		void *const result, size_t result_len, bool *indefinite_length_array)
 {
 	zcbor_trace(state, "value_extract");
 	zcbor_assert_state(result_len != 0, "0-length result not supported.\r\n");
 	zcbor_assert_state(result_len <= 8, "result sizes above 8 bytes not supported.\r\n");
+	zcbor_assert_state(state != NULL, "state cannot be NULL.\r\n");
 	zcbor_assert_state(result != NULL, "result cannot be NULL.\r\n");
 
 	INITIAL_CHECKS();
 	ZCBOR_ERR_IF((state->elem_count == 0), ZCBOR_ERR_LOW_ELEM_COUNT);
 
 	uint8_t additional = ZCBOR_ADDITIONAL(*state->payload);
-	size_t len = additional_len(additional);
-	uint8_t *result_offs = (uint8_t *)result + ZCBOR_ECPY_OFFS(result_len, MAX(1, len));
+	size_t len = 0;
 
-	ZCBOR_ERR_IF(additional > ZCBOR_VALUE_IS_8_BYTES, ZCBOR_ERR_ADDITIONAL_INVAL);
-	ZCBOR_ERR_IF(len > result_len, ZCBOR_ERR_INT_SIZE);
-	ZCBOR_ERR_IF((state->payload + len + 1) > state->payload_end,
-		ZCBOR_ERR_NO_PAYLOAD);
-
-	memset(result, 0, result_len);
-
-	if (len == 0) {
-		*result_offs = additional;
-	} else {
-		endian_copy(result_offs, state->payload + 1, len);
-
-#ifdef ZCBOR_CANONICAL
-		ZCBOR_ERR_IF((zcbor_header_len_ptr(result, result_len) != (len + 1)),
+	if ((additional == ZCBOR_VALUE_IS_INDEFINITE_LENGTH) && (indefinite_length_array != NULL)) {
+		/* Indefinite length array. */
+		ZCBOR_ERR_IF(ZCBOR_ENFORCE_CANONICAL(state),
 			ZCBOR_ERR_INVALID_VALUE_ENCODING);
-#endif
+		*indefinite_length_array = true;
+	} else {
+		len = additional_len(additional);
+		uint8_t *result_offs = (uint8_t *)result + ZCBOR_ECPY_OFFS(result_len, MAX(1, len));
+
+		ZCBOR_ERR_IF(additional > ZCBOR_VALUE_IS_8_BYTES, ZCBOR_ERR_ADDITIONAL_INVAL);
+		ZCBOR_ERR_IF(len > result_len, ZCBOR_ERR_INT_SIZE);
+		ZCBOR_ERR_IF((state->payload + len + 1) > state->payload_end,
+			ZCBOR_ERR_NO_PAYLOAD);
+
+		memset(result, 0, result_len);
+
+		if (len == 0) {
+			*result_offs = additional;
+		} else {
+			endian_copy(result_offs, state->payload + 1, len);
+
+			if (ZCBOR_ENFORCE_CANONICAL(state)) {
+				ZCBOR_ERR_IF((zcbor_header_len_ptr(result, result_len) != (len + 1)),
+					ZCBOR_ERR_INVALID_VALUE_ENCODING);
+			}
+		}
 	}
 
 	state->payload_bak = state->payload;
@@ -160,32 +185,18 @@ static bool value_extract(zcbor_state_t *state,
 	return true;
 }
 
-
-bool zcbor_int_decode(zcbor_state_t *state, void *result, size_t result_size)
+static int val_to_int(zcbor_major_type_t major_type, void *result, size_t result_size)
 {
-	PRINT_FUNC();
-	INITIAL_CHECKS();
-	zcbor_major_type_t major_type = ZCBOR_MAJOR_TYPE(*state->payload);
-	uint8_t *result_uint8 = (uint8_t *)result;
-	int8_t *result_int8 = (int8_t *)result;
-
-	if (major_type != ZCBOR_MAJOR_TYPE_PINT
-		&& major_type != ZCBOR_MAJOR_TYPE_NINT) {
-		/* Value to be read doesn't have the right type. */
-		ZCBOR_ERR(ZCBOR_ERR_WRONG_TYPE);
-	}
-
-	if (!value_extract(state, result, result_size)) {
-		ZCBOR_FAIL();
-	}
-
 #ifdef ZCBOR_BIG_ENDIAN
-	if (result_int8[0] < 0) {
+	int8_t msbyte = *(int8_t *)result;
 #else
-	if (result_int8[result_size - 1] < 0) {
+	int8_t msbyte = ((int8_t *)result)[result_size - 1];
 #endif
+	uint8_t *result_uint8 = (uint8_t *)result;
+
+	if ((result_size == 0) || (msbyte < 0)) {
 		/* Value is too large to fit in a signed integer. */
-		ERR_RESTORE(ZCBOR_ERR_INT_SIZE);
+		return ZCBOR_ERR_INT_SIZE;
 	}
 
 	if (major_type == ZCBOR_MAJOR_TYPE_NINT) {
@@ -193,6 +204,31 @@ bool zcbor_int_decode(zcbor_state_t *state, void *result, size_t result_size)
 		for (unsigned int i = 0; i < result_size; i++) {
 			result_uint8[i] = (uint8_t)~result_uint8[i];
 		}
+	}
+
+	return ZCBOR_SUCCESS;
+}
+
+
+bool zcbor_int_decode(zcbor_state_t *state, void *result, size_t result_size)
+{
+	PRINT_FUNC();
+	INITIAL_CHECKS();
+	zcbor_major_type_t major_type = ZCBOR_MAJOR_TYPE(*state->payload);
+
+	if (major_type != ZCBOR_MAJOR_TYPE_PINT
+		&& major_type != ZCBOR_MAJOR_TYPE_NINT) {
+		/* Value to be read doesn't have the right type. */
+		ZCBOR_ERR(ZCBOR_ERR_WRONG_TYPE);
+	}
+
+	if (!value_extract(state, result, result_size, NULL)) {
+		ZCBOR_FAIL();
+	}
+
+	int err = val_to_int(major_type, result, result_size);
+	if (err != ZCBOR_SUCCESS) {
+		ERR_RESTORE(err);
 	}
 
 	return true;
@@ -218,7 +254,7 @@ bool zcbor_uint_decode(zcbor_state_t *state, void *result, size_t result_size)
 	PRINT_FUNC();
 	INITIAL_CHECKS_WITH_TYPE(ZCBOR_MAJOR_TYPE_PINT);
 
-	if (!value_extract(state, result, result_size)) {
+	if (!value_extract(state, result, result_size, NULL)) {
 		zcbor_log("uint with size %zu failed.\r\n", result_size);
 		ZCBOR_FAIL();
 	}
@@ -385,7 +421,7 @@ static bool str_start_decode(zcbor_state_t *state,
 {
 	INITIAL_CHECKS_WITH_TYPE(exp_major_type);
 
-	if (!value_extract(state, &result->len, sizeof(result->len))) {
+	if (!value_extract(state, &result->len, sizeof(result->len), NULL)) {
 		ZCBOR_FAIL();
 	}
 
@@ -393,22 +429,40 @@ static bool str_start_decode(zcbor_state_t *state,
 	return true;
 }
 
+
+/**
+ * @brief Checks if there is a potential overflow when decoding a string.
+ *
+ * This function is used to check if the payload contains the whole string.
+ * The payload in the state must point to the start of the string payload, the
+ * length having already been extracted from the header via @ref value_extract or
+ * @ref str_start_decode.
+ *
+ * @param state The current state of the decoding.
+ * @param len   The decoded length of the string.
+ * @return      true if ok (no overflow), false otherwise.
+ */
+static bool str_overflow_check(zcbor_state_t *state, size_t len)
+{
+	/* Casting to size_t is safe since value_extract() checks that
+	 * payload_end is bigger that payload. */
+	if (len > (size_t)(state->payload_end - state->payload)) {
+		zcbor_log("error: 0x%zu > 0x%zu\r\n",
+			len,
+			(state->payload_end - state->payload));
+		ERR_RESTORE(ZCBOR_ERR_NO_PAYLOAD);
+	}
+	return true;
+}
+
+
 static bool str_start_decode_with_overflow_check(zcbor_state_t *state,
 		struct zcbor_string *result, zcbor_major_type_t exp_major_type)
 {
 	bool res = str_start_decode(state, result, exp_major_type);
 
-	if (!res) {
+	if (!res || !str_overflow_check(state, result->len)) {
 		ZCBOR_FAIL();
-	}
-
-	/* Casting to size_t is safe since str_start_decode() checks that
-	 * payload_end is bigger that payload. */
-	if (result->len > (size_t)(state->payload_end - state->payload)) {
-		zcbor_log("error: 0x%zu > 0x%zu\r\n",
-			result->len,
-			(state->payload_end - state->payload));
-		ERR_RESTORE(ZCBOR_ERR_NO_PAYLOAD);
 	}
 
 	return true;
@@ -647,23 +701,12 @@ static bool list_map_start_decode(zcbor_state_t *state,
 
 	INITIAL_CHECKS_WITH_TYPE(exp_major_type);
 
-#ifndef ZCBOR_CANONICAL
-	if (ZCBOR_ADDITIONAL(*state->payload) == ZCBOR_VALUE_IS_INDEFINITE_LENGTH) {
-		/* Indefinite length array. */
-		new_elem_count = ZCBOR_LARGE_ELEM_COUNT;
-		ZCBOR_ERR_IF(state->elem_count == 0, ZCBOR_ERR_LOW_ELEM_COUNT);
-		indefinite_length_array = true;
-		state->payload_bak = state->payload++;
-		state->elem_count--;
-	} else
-#endif
-	{
-		if (!value_extract(state, &new_elem_count, sizeof(new_elem_count))) {
-			ZCBOR_FAIL();
-		}
+	if (!value_extract(state, &new_elem_count, sizeof(new_elem_count), &indefinite_length_array)) {
+		ZCBOR_FAIL();
 	}
 
-	if (!zcbor_new_backup(state, new_elem_count)) {
+	if (!zcbor_new_backup(state, indefinite_length_array
+				? ZCBOR_LARGE_ELEM_COUNT : new_elem_count)) {
 		FAIL_RESTORE();
 	}
 
@@ -698,11 +741,8 @@ bool zcbor_map_start_decode(zcbor_state_t *state)
 
 bool zcbor_array_at_end(zcbor_state_t *state)
 {
-#ifdef ZCBOR_CANONICAL
-	const bool indefinite_length_array = false;
-#else
 	const bool indefinite_length_array = state->decode_state.indefinite_length_array;
-#endif
+
 	return ((!indefinite_length_array && (state->elem_count == 0))
 		|| (indefinite_length_array
 			&& (state->payload < state->payload_end)
@@ -820,6 +860,8 @@ static bool allocate_map_flags(zcbor_state_t *state, size_t old_flags)
 	size_t new_bytes = zcbor_flags_to_bytes(state->decode_state.map_elem_count);
 	size_t old_bytes = zcbor_flags_to_bytes(old_flags);
 	size_t extra_bytes = new_bytes - old_bytes;
+
+	ZCBOR_ERR_IF(!state->constant_state, ZCBOR_ERR_CONSTANT_STATE_MISSING);
 	const uint8_t *flags_end = state->constant_state->map_search_elem_state_end;
 
 	if (extra_bytes) {
@@ -914,7 +956,7 @@ bool zcbor_unordered_map_search(zcbor_decoder_t key_decoder, zcbor_state_t *stat
 		}
 
 		if (should_try_key(state) && try_key(state, key_result, key_decoder)) {
-			if (!state->constant_state->manually_process_elem) {
+			if (!ZCBOR_MANUALLY_PROCESS_ELEM(state)) {
 				ZCBOR_FAIL_IF(!zcbor_elem_processed(state));
 			}
 			return true;
@@ -976,7 +1018,6 @@ static bool list_map_end_decode(zcbor_state_t *state)
 {
 	size_t max_elem_count = 0;
 
-#ifndef ZCBOR_CANONICAL
 	if (state->decode_state.indefinite_length_array) {
 		if (!array_end_expect(state)) {
 			ZCBOR_FAIL();
@@ -984,7 +1025,6 @@ static bool list_map_end_decode(zcbor_state_t *state)
 		max_elem_count = ZCBOR_MAX_ELEM_COUNT;
 		state->decode_state.indefinite_length_array = false;
 	}
-#endif
 	if (!zcbor_process_backup(state,
 			ZCBOR_FLAG_RESTORE | ZCBOR_FLAG_CONSUME | ZCBOR_FLAG_KEEP_PAYLOAD,
 			max_elem_count)) {
@@ -1060,7 +1100,7 @@ bool zcbor_simple_decode(zcbor_state_t *state, uint8_t *result)
 	 * Other additional values are not considered simple values. */
 	ZCBOR_ERR_IF(ZCBOR_ADDITIONAL(*state->payload) > 24, ZCBOR_ERR_WRONG_TYPE);
 
-	if (!value_extract(state, result, sizeof(*result))) {
+	if (!value_extract(state, result, sizeof(*result), NULL)) {
 		ZCBOR_FAIL();
 	}
 	return true;
@@ -1096,7 +1136,7 @@ bool zcbor_nil_expect(zcbor_state_t *state, void *unused)
 {
 	PRINT_FUNC();
 	(void)unused;
-	return zcbor_simple_expect(state, 22);
+	return zcbor_simple_expect(state, ZCBOR_NIL_VAL);
 }
 
 
@@ -1104,7 +1144,7 @@ bool zcbor_undefined_expect(zcbor_state_t *state, void *unused)
 {
 	PRINT_FUNC();
 	(void)unused;
-	return zcbor_simple_expect(state, 23);
+	return zcbor_simple_expect(state, ZCBOR_UNDEF_VAL);
 }
 
 
@@ -1154,7 +1194,7 @@ bool zcbor_float16_bytes_decode(zcbor_state_t *state, uint16_t *result)
 	PRINT_FUNC();
 	ZCBOR_FAIL_IF(!float_check(state, ZCBOR_VALUE_IS_2_BYTES));
 
-	if (!value_extract(state, result, sizeof(*result))) {
+	if (!value_extract(state, result, sizeof(*result), NULL)) {
 		ZCBOR_FAIL();
 	}
 
@@ -1225,7 +1265,7 @@ bool zcbor_float32_decode(zcbor_state_t *state, float *result)
 	PRINT_FUNC();
 	ZCBOR_FAIL_IF(!float_check(state, ZCBOR_VALUE_IS_4_BYTES));
 
-	if (!value_extract(state, result, sizeof(*result))) {
+	if (!value_extract(state, result, sizeof(*result), NULL)) {
 		ZCBOR_FAIL();
 	}
 
@@ -1293,7 +1333,7 @@ bool zcbor_float64_decode(zcbor_state_t *state, double *result)
 	PRINT_FUNC();
 	ZCBOR_FAIL_IF(!float_check(state, ZCBOR_VALUE_IS_8_BYTES));
 
-	if (!value_extract(state, result, sizeof(*result))) {
+	if (!value_extract(state, result, sizeof(*result), NULL)) {
 		ZCBOR_FAIL();
 	}
 
@@ -1423,14 +1463,11 @@ bool zcbor_any_skip(zcbor_state_t *state, void *result)
 		additional = ZCBOR_ADDITIONAL(*state_copy.payload);
 	}
 
-#ifdef ZCBOR_CANONICAL
-	const bool indefinite_length_array = false;
-#else
-	const bool indefinite_length_array = ((additional == ZCBOR_VALUE_IS_INDEFINITE_LENGTH)
-		&& ((major_type == ZCBOR_MAJOR_TYPE_LIST) || (major_type == ZCBOR_MAJOR_TYPE_MAP)));
-#endif
+	bool indefinite_length_array = false;
+	bool *ila_ptr = ((major_type == ZCBOR_MAJOR_TYPE_MAP)
+			|| (major_type == ZCBOR_MAJOR_TYPE_LIST)) ? &indefinite_length_array : NULL;
 
-	if (!indefinite_length_array && !value_extract(&state_copy, &value, sizeof(value))) {
+	if (!value_extract(&state_copy, &value, sizeof(value), ila_ptr)) {
 		/* Can happen because of elem_count (or payload_end) */
 		ZCBOR_FAIL();
 	}
@@ -1438,12 +1475,8 @@ bool zcbor_any_skip(zcbor_state_t *state, void *result)
 	switch (major_type) {
 		case ZCBOR_MAJOR_TYPE_BSTR:
 		case ZCBOR_MAJOR_TYPE_TSTR:
-			/* 'value' is the length of the BSTR or TSTR.
-			 * The subtraction is safe because value_extract() above
-			 * checks that payload_end is greater than payload. */
-			ZCBOR_ERR_IF(
-				value > (uint64_t)(state_copy.payload_end - state_copy.payload),
-				ZCBOR_ERR_NO_PAYLOAD);
+			/* 'value' is the length of the BSTR or TSTR. */
+			ZCBOR_FAIL_IF(!str_overflow_check(state, (size_t)value));
 			(state_copy.payload) += value;
 			break;
 		case ZCBOR_MAJOR_TYPE_MAP:
@@ -1452,7 +1485,6 @@ bool zcbor_any_skip(zcbor_state_t *state, void *result)
 			/* fallthrough */
 		case ZCBOR_MAJOR_TYPE_LIST:
 			if (indefinite_length_array) {
-				state_copy.payload++;
 				value = ZCBOR_LARGE_ELEM_COUNT;
 			}
 			state_copy.elem_count = (size_t)value;
@@ -1483,7 +1515,7 @@ bool zcbor_tag_decode(zcbor_state_t *state, uint32_t *result)
 	PRINT_FUNC();
 	INITIAL_CHECKS_WITH_TYPE(ZCBOR_MAJOR_TYPE_TAG);
 
-	if (!value_extract(state, result, sizeof(*result))) {
+	if (!value_extract(state, result, sizeof(*result), NULL)) {
 		ZCBOR_FAIL();
 	}
 	state->elem_count++;

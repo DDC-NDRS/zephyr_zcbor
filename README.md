@@ -73,6 +73,11 @@ The `elem_count` member refers to the number of encoded objects in the current l
 Backups are needed for _decoding_ if there are any lists, maps, or CBOR-encoded strings (`zcbor_bstr_*_decode`) in the data.
 Backups are needed for _encoding_ if there are any lists or maps *and* you are using canonical encoding (`ZCBOR_CANONICAL`), or when using the `zcbor_bstr_*_encode` functions.
 
+`n_flags` is used when decoding maps where the order is unknown.
+It allows using the `zcbor_unordered_map_search()` function to search for elements.
+
+See the header files for more information.
+
 ```c
 /** Initialize a decoding state (could include an array of backup states).
  *  After calling this, decode_state[0] is ready to be used with the decoding APIs. */
@@ -92,7 +97,7 @@ If using zcbor with Zephyr, use the [Kconfig options](https://github.com/zephyrp
 
 Name                      | Description
 ------------------------- | -----------
-`ZCBOR_CANONICAL`         | Assume canonical encoding (AKA "deterministically encoded CBOR"). When encoding lists and maps, do not use indefinite length encoding. Enabling `ZCBOR_CANONICAL` increases code size and makes the encoding library more often use state backups. When decoding, ensure that the incoming data conforms to canonical encoding, i.e. no indefinite length encoding, and always using minimal length encoding (e.g. not using 16 bits to encode a value < 256). Note: the map ordering constraint in canonical encoding is not checked.
+`ZCBOR_CANONICAL`         | Assume canonical encoding (AKA "deterministically encoded CBOR", ch 4.2.1 in RFC8949). When encoding lists and maps, do not use indefinite length encoding. Enabling `ZCBOR_CANONICAL` increases code size and makes the encoding library more often use state backups. When decoding, if `enforce_canonical` is true, ensure that the incoming data conforms to canonical encoding, i.e. no indefinite length encoding, and always using minimal length encoding (e.g. not using 16 bits to encode a value < 256). Enabling `ZCBOR_CANONICAL` changes the default of `enforce_canonical` from `false` to `true` Note: the map ordering constraint in canonical encoding is not checked.
 `ZCBOR_VERBOSE`           | Print log messages on encoding/decoding errors (`zcbor_log()`), and also a trace message (`zcbor_trace()`) for each decoded value, and in each generated function (when using code generation).
 `ZCBOR_ASSERTS`           | Enable asserts (`zcbor_assert()`). When they fail, the assert statements instruct the current function to return a `ZCBOR_ERR_ASSERTION` error. If `ZCBOR_VERBOSE` is enabled, a message is printed.
 `ZCBOR_STOP_ON_ERROR`     | Enable the `stop_on_error` functionality. This makes all functions abort their execution if called when an error has already happened.
@@ -517,7 +522,9 @@ options:
                         union members.
   --file-header FILE_HEADER
                         Header to be included in the comment at the top of
-                        generated C files, e.g. copyright.
+                        generated files, e.g. copyright. Can be a string or a
+                        path to a file. If interpreted as a path to an
+                        existing file, the file's contents will be used.
 
 ```
 

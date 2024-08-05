@@ -6,8 +6,6 @@
 
 cmake_minimum_required(VERSION 3.13.1)
 
-set_property(GLOBAL PROPERTY CSTD c11) # To avoid issues with c99 and -Wpedantic
-
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(test5_corner_cases)
 include(../../cmake/test_template.cmake)
@@ -55,6 +53,10 @@ set(py_command
     InvalidIdentifiers
     Uint64List
     BstrSize
+    MapUnionPrimAlias
+    Keywords
+    EmptyContainer
+    SingleElemList
   --decode
   --git-sha-header
   --short-names
@@ -67,10 +69,9 @@ execute_process(
   COMMAND_ERROR_IS_FATAL ANY
 )
 
-add_library(corner_cases
-  ${PROJECT_BINARY_DIR}/src/corner_cases.c
-  ${PROJECT_BINARY_DIR}/src/zcbor_decode.c
-  ${PROJECT_BINARY_DIR}/src/zcbor_common.c)
+FILE(GLOB build_sources ${PROJECT_BINARY_DIR}/src/*.c)
+
+add_library(corner_cases ${build_sources})
 
 target_include_directories(corner_cases PUBLIC ${PROJECT_BINARY_DIR}/include)
 target_link_libraries(corner_cases PRIVATE zephyr_interface)

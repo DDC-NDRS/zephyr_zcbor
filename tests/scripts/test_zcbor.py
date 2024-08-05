@@ -15,6 +15,9 @@ import cbor2
 from platform import python_version_tuple
 from sys import platform, exit
 from yaml import safe_load
+from tempfile import mkdtemp
+from shutil import rmtree
+from os import linesep
 
 
 try:
@@ -30,25 +33,28 @@ that picks up changes in the files without having to reinstall.
 
 p_root = Path(__file__).absolute().parents[2]
 p_tests = Path(p_root, 'tests')
-p_manifest12 = Path(p_tests, 'cases', 'manifest12.cddl')
-p_manifest14 = Path(p_tests, 'cases', 'manifest14.cddl')
-p_manifest16 = Path(p_tests, 'cases', 'manifest16.cddl')
-p_manifest20 = Path(p_tests, 'cases', 'manifest20.cddl')
-p_test_vectors12 = tuple(Path(p_tests, 'cases', f'manifest12_example{i}.cborhex') for i in range(6))
-p_test_vectors14 = tuple(Path(p_tests, 'cases', f'manifest14_example{i}.cborhex') for i in range(6))
-p_test_vectors16 = tuple(Path(p_tests, 'cases', f'manifest14_example{i}.cborhex') for i in range(6))  # Identical to manifest14.
-p_test_vectors20 = tuple(Path(p_tests, 'cases', f'manifest20_example{i}.cborhex') for i in range(6))
-p_optional = Path(p_tests, 'cases', 'optional.cddl')
-p_corner_cases = Path(p_tests, 'cases', 'corner_cases.cddl')
-p_cose = Path(p_tests, 'cases', 'cose.cddl')
-p_manifest14_priv = Path(p_tests, 'cases', 'manifest14.priv')
-p_manifest14_pub = Path(p_tests, 'cases', 'manifest14.pub')
-p_map_bstr_cddl = Path(p_tests, 'cases', 'map_bstr.cddl')
-p_map_bstr_yaml = Path(p_tests, 'cases', 'map_bstr.yaml')
-p_yaml_compat_cddl = Path(p_tests, 'cases', 'yaml_compatibility.cddl')
-p_yaml_compat_yaml = Path(p_tests, 'cases', 'yaml_compatibility.yaml')
+p_cases = Path(p_tests, 'cases')
+p_manifest12 = Path(p_cases, 'manifest12.cddl')
+p_manifest14 = Path(p_cases, 'manifest14.cddl')
+p_manifest16 = Path(p_cases, 'manifest16.cddl')
+p_manifest20 = Path(p_cases, 'manifest20.cddl')
+p_test_vectors12 = tuple(Path(p_cases, f'manifest12_example{i}.cborhex') for i in range(6))
+p_test_vectors14 = tuple(Path(p_cases, f'manifest14_example{i}.cborhex') for i in range(6))
+p_test_vectors16 = tuple(Path(p_cases, f'manifest14_example{i}.cborhex') for i in range(6))  # Identical to manifest14.
+p_test_vectors20 = tuple(Path(p_cases, f'manifest20_example{i}.cborhex') for i in range(6))
+p_optional = Path(p_cases, 'optional.cddl')
+p_corner_cases = Path(p_cases, 'corner_cases.cddl')
+p_cose = Path(p_cases, 'cose.cddl')
+p_manifest14_priv = Path(p_cases, 'manifest14.priv')
+p_manifest14_pub = Path(p_cases, 'manifest14.pub')
+p_map_bstr_cddl = Path(p_cases, 'map_bstr.cddl')
+p_map_bstr_yaml = Path(p_cases, 'map_bstr.yaml')
+p_yaml_compat_cddl = Path(p_cases, 'yaml_compatibility.cddl')
+p_yaml_compat_yaml = Path(p_cases, 'yaml_compatibility.yaml')
+p_pet_cddl = Path(p_cases, 'pet.cddl')
 p_README = Path(p_root, 'README.md')
 p_prelude = Path(p_root, 'zcbor', 'prelude.cddl')
+p_VERSION = Path(p_root, 'zcbor', 'VERSION')
 
 
 class TestManifest(TestCase):
@@ -625,6 +631,47 @@ class TestCLI(PopenTest):
             b"unless --output-cmake is specified.",
             stderr2)
 
+    def do_test_file_header(self, from_file=False):
+        tempd = Path(mkdtemp())
+        file_header = """Sample
+
+file header"""
+        if from_file:
+            (tempd / "file_header.txt").write_text(file_header, encoding="utf-8")
+            file_header_input = str(tempd / "file_header.txt")
+        else:
+            file_header_input = file_header
+
+        _, __ = self.popen_test(["zcbor", "code", "--cddl", str(p_pet_cddl), "-t", "Pet", "--output-cmake", str(tempd / "pet.cmake"), "-d", "-e", "--file-header", (file_header_input), "--dq", "5"], "")
+        exp_cmake_header = f"""#
+# Sample
+#
+# file header
+#
+# Generated using zcbor version {p_VERSION.read_text(encoding="utf-8")}
+# https://github.com/NordicSemiconductor/zcbor
+# Generated with a --default-max-qty of 5
+#""".splitlines()
+        exp_c_header = f"""/*
+ * Sample
+ *
+ * file header
+ *
+ * Generated using zcbor version {p_VERSION.read_text(encoding="utf-8")}
+ * https://github.com/NordicSemiconductor/zcbor
+ * Generated with a --default-max-qty of 5
+ */""".splitlines()
+        self.assertEqual(exp_cmake_header, (tempd / "pet.cmake").read_text(encoding="utf-8").splitlines()[:9])
+        for p in (tempd / "src" / "pet_decode.c", tempd / "src" / "pet_encode.c",
+                  tempd / "include" / "pet_decode.h", tempd / "include" / "pet_encode.h",
+                  tempd / "include" / "pet_types.h"):
+            self.assertEqual(exp_c_header, p.read_text(encoding="utf-8").splitlines()[:9])
+        rmtree(tempd)
+
+    def test_file_header(self):
+        self.do_test_file_header()
+        self.do_test_file_header(from_file=True)
+
 
 class TestOptional(TestCase):
     def test_optional_0(self):
@@ -659,7 +706,7 @@ class TestFloat(TestCase):
         cddl_res = zcbor.DataTranslator.from_cddl(
             p_prelude.read_text(encoding="utf-8") + '\n' + p_corner_cases.read_text(encoding="utf-8"), 16)
         cddl = cddl_res.my_types['Floats']
-        test_yaml = f"[3.1415, 1234567.89, 0.000123, 3.1415, 2.71828, 5.0, {1/3}]"
+        test_yaml = f"[3.1415, 1234567.89, 0.000123, 3.1415, 2.71828, 5.0, {1 / 3}]"
 
         decoded = cddl.decode_str_yaml(test_yaml)
         self.assertEqual(3.1415, decoded.float_16)

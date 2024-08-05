@@ -163,7 +163,8 @@ void zcbor_new_state(zcbor_state_t *state_array, size_t n_states,
 #ifdef ZCBOR_STOP_ON_ERROR
 	state_array[0].constant_state->stop_on_error = false;
 #endif
-	state_array[0].constant_state->manually_process_elem = false;
+	state_array[0].constant_state->enforce_canonical = ZCBOR_ENFORCE_CANONICAL_DEFAULT;
+	state_array[0].constant_state->manually_process_elem = ZCBOR_MANUALLY_PROCESS_ELEM_DEFAULT;
 #ifdef ZCBOR_MAP_SMART_SEARCH
 	state_array[0].constant_state->map_search_elem_state_end = flags + flags_bytes;
 #endif
@@ -279,6 +280,22 @@ size_t zcbor_header_len_ptr(const void *const value, size_t value_len)
 
 	memcpy(((uint8_t*)&val64) + ZCBOR_ECPY_OFFS(sizeof(val64), value_len), value, value_len);
 	return zcbor_header_len(val64);
+}
+
+
+size_t zcbor_remaining_str_len(zcbor_state_t *state)
+{
+	size_t max_len = (size_t)state->payload_end - (size_t)state->payload;
+
+	if (max_len == 0) {
+		return 0;
+	}
+
+	size_t max_header_len = zcbor_header_len(max_len);
+	size_t min_header_len = zcbor_header_len(max_len - max_header_len);
+	size_t header_len = zcbor_header_len(max_len - min_header_len);
+
+	return max_len - header_len;
 }
 
 
