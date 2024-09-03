@@ -14,7 +14,7 @@ from typing import NamedTuple
 from argparse import ArgumentParser, ArgumentTypeError, RawDescriptionHelpFormatter, FileType
 from datetime import datetime
 from copy import copy
-from itertools import tee
+from itertools import tee, chain
 from cbor2 import (loads, dumps, CBORTag, load, CBORDecodeValueError, CBORDecodeEOF, undefined,
                    CBORSimpleValue)
 from yaml import safe_load as yaml_load, dump as yaml_dump
@@ -1046,8 +1046,11 @@ class CddlXcoder(CddlParser):
         self.dependsOnCall = False
         self.skipped = False
 
-    def var_name(self, with_prefix=False):
+    def var_name(self, with_prefix=False, observe_skipped=True):
         """Name of variables and enum members for this element."""
+        if (observe_skipped and self.skip_condition()
+                and self.type in ["LIST", "MAP", "GROUP"] and self.value):
+            return self.value[0].var_name(with_prefix)
         name = self.id(with_prefix=with_prefix)
         if name in c_keywords:
             name = name.capitalize()
@@ -1060,7 +1063,7 @@ class CddlXcoder(CddlParser):
         if self.skipped:
             return True
         if self.type in ["LIST", "MAP", "GROUP"]:
-            return not self.multi_val_condition()
+            return not self.repeated_multi_var_condition()
         if self.type == "OTHER":
             return ((not self.repeated_multi_var_condition())
                     and (not self.multi_var_condition())
@@ -1087,8 +1090,8 @@ class CddlXcoder(CddlParser):
     def set_access_prefix(self, prefix, is_delegated=False):
         """Recursively set the access prefix for this element and all its children."""
         self.accessPrefix = prefix
-        self.is_delegated = is_delegated
         if self.type in ["LIST", "MAP", "GROUP", "UNION"]:
+            self.set_skipped(self.skip_condition())
             list(map(lambda child: child.set_skipped(child.skip_condition()),
                      self.value))
             list(map(lambda child: child.set_access_prefix(
@@ -1096,12 +1099,14 @@ class CddlXcoder(CddlParser):
                      is_delegated=(self.delegate_type_condition()
                                    or (is_delegated and self.skip_condition()))),
                      self.value))
-        elif self in self.my_types.values() and self.type != "OTHER":
+        elif self in self.my_types.values():
             self.set_skipped(not self.multi_member())
         if self.key is not None:
             self.key.set_access_prefix(self.var_access())
         if self.cbor_var_condition():
             self.cbor.set_access_prefix(self.var_access())
+        self.is_delegated = is_delegated and not self.skip_condition()
+        return
 
     def multi_member(self):
         """Whether this type has multiple member variables."""
@@ -1889,11 +1894,10 @@ class CodeGenerator(CddlXcoder):
 
     def delegate_type_condition(self):
         """Whether to use the C type of the first child as this type's C type"""
-        ret = (self.type in ["LIST", "MAP", "GROUP"]
-               and not self.multi_var_condition()
-               and not self.multi_val_condition()
-               and not self.self_repeated_multi_var_condition()
-               and self in self.my_types.values())
+        ret = self.skip_condition() and (self.multi_var_condition()
+                                         or self.self_repeated_multi_var_condition()
+                                         or self.range_check_condition()
+                                         or (self in self.my_types.values()))
         return ret
 
     def is_delegated_type(self):
@@ -2218,11 +2222,11 @@ class CodeGenerator(CddlXcoder):
 
     def xcode_func_name(self):
         """Name of the encoder/decoder function for this element."""
-        return f"{self.mode}_{self.var_name(with_prefix=True)}"
+        return f"{self.mode}_{self.var_name(with_prefix=True, observe_skipped=False)}"
 
     def repeated_xcode_func_name(self):
         """Name of the encoder/decoder function for the repeated part of this element."""
-        return f"{self.mode}_repeated_{self.var_name(with_prefix=True)}"
+        return f"{self.mode}_repeated_{self.var_name(with_prefix=True, observe_skipped=False)}"
 
     def single_func_prim_name(self, union_int=None, ptr_result=False):
         """Function name for xcoding this type, when it is a primitive type"""
@@ -2589,16 +2593,14 @@ class CodeGenerator(CddlXcoder):
                     f"This code needs self.mode to be 'decode', not {self.mode}."
                 if not self.repeated_single_func_impl_condition():
                     decode_str = self.repeated_xcode(union_int)
-                    assert "zcbor_" in decode_str, \
-                        """Must be a direct call to zcbor to guarantee that payload and elem_count"
-are cleaned up after a failure."""
                     return f"({self.present_var_access()} = {self.repeated_xcode(union_int)}, 1)"
                 func, *arguments = self.repeated_single_func(ptr_result=True)
                 return (
                     f"zcbor_present_decode(&(%s), (zcbor_decoder_t *)%s, %s)" %
                     (self.present_var_access(), func, xcode_args(*arguments),))
         elif self.count_var_condition():
-            func, *arguments = self.repeated_single_func(ptr_result=True)
+            func, arg = self.repeated_single_func(ptr_result=True)
+
             minmax = "_minmax" if self.mode == "encode" else ""
             mode = self.mode
             return (
@@ -2607,7 +2609,7 @@ are cleaned up after a failure."""
                  self.max_qty,
                  self.count_var_access(),
                  func,
-                 xcode_args(*arguments),
+                 xcode_args("*" + arg if arg != "NULL" and self.result_len() != "0" else arg),
                  self.result_len()))
         else:
             return self.repeated_xcode(union_int)
@@ -2754,6 +2756,33 @@ static bool {xcoder.func_name}(zcbor_state_t *state, {"" if mode == "decode" els
 
     def render_function(self, xcoder, mode):
         body = xcoder.body
+
+        # Define the subroutine "paren" that matches parenthesised expressions.
+        paren_re = r'(?(DEFINE)(?P<paren>\(((?>[^\(\)]+|(?&paren))*)\)))'
+        # This uses "paren" to match a single argument to a function.
+        arg_re = rf'([^,\(\)]|(?&paren))+'
+        # Match a function pointer argument to a function.
+        func_re = rf'\(zcbor_(en|de)coder_t \*\)(?P<func>{arg_re})'
+        # Match a triplet of function pointer, state arg, and result arg.
+        call_re = rf'{func_re}, (?P<state>{arg_re}), (?P<arg>{arg_re})'
+        multi_re = rf'{paren_re}zcbor_multi_(en|de)code\(({arg_re},){{3}} {call_re}'
+        present_re = rf'{paren_re}zcbor_present_(en|de)code\({arg_re}, {call_re}\)'
+        map_re = rf'{paren_re}zcbor_unordered_map_search\({call_re}\)'
+        all_funcs = chain(getrp(multi_re).finditer(body),
+                          getrp(present_re).finditer(body),
+                          getrp(map_re).finditer(body))
+        arg_test = ""
+        calls = ("\n		".join(
+            (f"{m.group('func')}({m.group('state')}, {m.group('arg')});" for m in (all_funcs))))
+        if calls != "":
+            arg_test = f"""
+	if (false) {{
+		/* For testing that the types of the arguments are correct.
+		 * A compiler error here means a bug in zcbor.
+		 */
+		{calls}
+	}}
+"""
         return f"""
 static bool {xcoder.func_name}(
 		zcbor_state_t *state, {"" if mode == "decode" else "const "}{
@@ -2765,7 +2794,7 @@ static bool {xcoder.func_name}(
 	{"bool int_res;" if "int_res" in body else ""}
 
 	bool res = ({body});
-
+{arg_test}
 	log_result(state, res, __func__);
 	return res;
 }}""".replace("	\n", "")  # call replace() to remove empty lines.
@@ -2931,7 +2960,7 @@ target_include_directories({target_name} PUBLIC
             h_name = Path(include_prefix, Path(h_files[mode].name).name)
 
             # Create and populate the generated c and h file.
-            makedirs(path.dirname(c_files[mode].name), exist_ok=True)
+            makedirs(path.dirname(Path(c_files[mode].name).absolute()), exist_ok=True)
 
             type_def_name = Path(include_prefix, Path(type_file.name).name)
 

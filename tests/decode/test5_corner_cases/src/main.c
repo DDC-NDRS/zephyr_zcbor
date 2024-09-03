@@ -11,6 +11,12 @@
 #include <common_test.h>
 #include <zcbor_print.h>
 
+static void zassert_zcbor_string(struct zcbor_string *str, uint8_t *expected, size_t len)
+{
+	zassert_equal(len, str->len, "exp: %s\n", expected);
+	zassert_mem_equal(expected, str->value, len, "exp: %s\n", expected);
+}
+
 
 ZTEST(cbor_decode_test5, test_numbers)
 {
@@ -1698,13 +1704,21 @@ ZTEST(cbor_decode_test5, test_prelude)
 ZTEST(cbor_decode_test5, test_cbor_bstr)
 {
 
+// Length under 23/24
 #ifdef TEST_INDEFINITE_LENGTH_ARRAYS
-#define CBOR_BSTR_LEN(len) (len + 1)
+#define CBOR_BSTR_LEN1(len) (0x40 + len + 1)
 #else
-#define CBOR_BSTR_LEN(len) len
+#define CBOR_BSTR_LEN1(len) (0x40 + len)
+#endif
+
+// Length between 23/24 and 254/255
+#ifdef TEST_INDEFINITE_LENGTH_ARRAYS
+#define CBOR_BSTR_LEN2(len) 0x58, (len + 1)
+#else
+#define CBOR_BSTR_LEN2(len) 0x58, len
 #endif
 	uint8_t cbor_bstr_payload1[] = {
-		0x58, CBOR_BSTR_LEN(33),
+		CBOR_BSTR_LEN2(33),
 			LIST(4),
 				0x46, 0x65, 'H', 'e', 'l', 'l', 'o',
 				0x49, 0xFB, 0x40, 0x9, 0x21, 0xca, 0xc0, 0x83, 0x12, 0x6f /* 3.1415 */,
@@ -1714,7 +1728,7 @@ ZTEST(cbor_decode_test5, test_cbor_bstr)
 	};
 
 	uint8_t cbor_bstr_payload2_inv[] = {
-		0x58, CBOR_BSTR_LEN(33),
+		CBOR_BSTR_LEN2(33),
 			LIST(4),
 				0x46, 0x65, 'Y', 'e', 'l', 'l', 'o',
 				0x49, 0xFB, 0x40, 0x9, 0x21, 0xca, 0xc0, 0x83, 0x12, 0x6f /* 3.1415 */,
@@ -1724,7 +1738,7 @@ ZTEST(cbor_decode_test5, test_cbor_bstr)
 	};
 
 	uint8_t cbor_bstr_payload3_inv[] = {
-		0x58, CBOR_BSTR_LEN(33),
+		CBOR_BSTR_LEN2(33),
 			LIST(4),
 				0x46, 0x65, 'H', 'e', 'l', 'l', 'o',
 				0x49, 0xFB, 0x40, 0x9, 0x21, 0xca, 0, 0, 0, 0 /* 3.1415 */,
@@ -1734,7 +1748,7 @@ ZTEST(cbor_decode_test5, test_cbor_bstr)
 	};
 
 	uint8_t cbor_bstr_payload4_inv[] = {
-		0x58, CBOR_BSTR_LEN(18),
+		CBOR_BSTR_LEN1(18),
 			LIST(3),
 				0x46, 0x65, 'H', 'e', 'l', 'l', 'o',
 				0x49, 0xFB, 0x40, 0x9, 0x21, 0xca, 0xc0, 0x83, 0x12, 0x6f /* 3.1415 */,
@@ -1742,7 +1756,7 @@ ZTEST(cbor_decode_test5, test_cbor_bstr)
 	};
 
 	uint8_t cbor_bstr_payload5_inv[] = {
-		0x58, CBOR_BSTR_LEN(18),
+		CBOR_BSTR_LEN1(18),
 			LIST(2),
 				0x46, 0x65, 'H', 'e', 'l', 'l', 'o',
 				0x49, 0xFB, 0x40, 0x9, 0x21, 0xca, 0xc0, 0x83, 0x12, 0x6f /* 3.1415 */,
@@ -1750,7 +1764,7 @@ ZTEST(cbor_decode_test5, test_cbor_bstr)
 	};
 
 	uint8_t cbor_bstr_payload6_inv[] = {
-		0x58, CBOR_BSTR_LEN(33),
+		CBOR_BSTR_LEN2(33),
 			LIST(4),
 				0x46, 0x65, 'H', 'e', 'l', 'l', 'o',
 				0x49, 0xFB, 0x40, 0x9, 0x21, 0xca, 0xc0, 0x83, 0x12, 0x6f /* 3.1415 */,
@@ -1773,10 +1787,10 @@ ZTEST(cbor_decode_test5, test_cbor_bstr)
 	zassert_equal(ZCBOR_ERR_PAYLOAD_NOT_CONSUMED, cbor_decode_CBORBstr(cbor_bstr_payload3_inv, sizeof(cbor_bstr_payload3_inv), &result, &num_decode), NULL);
 
 	res = cbor_decode_CBORBstr(cbor_bstr_payload4_inv, sizeof(cbor_bstr_payload4_inv), &result, &num_decode);
-	zassert_equal(ARR_ERR4, res, "%d\r\n", res);
+	zassert_equal(ARR_ERR4, res, "%s\r\n", zcbor_error_str(res));
 
 	res = cbor_decode_CBORBstr(cbor_bstr_payload5_inv, sizeof(cbor_bstr_payload5_inv), &result, &num_decode);
-	zassert_equal(ARR_ERR4, res, "%d\r\n", res);
+	zassert_equal(ARR_ERR4, res, "%s\r\n", zcbor_error_str(res));
 
 	res = cbor_decode_CBORBstr(cbor_bstr_payload6_inv, sizeof(cbor_bstr_payload6_inv), &result, &num_decode);
 	zassert_equal(ZCBOR_ERR_PAYLOAD_NOT_CONSUMED, res, "%d\r\n", res);
@@ -2245,6 +2259,161 @@ ZTEST(cbor_decode_test5, test_single_elem_list)
 	zassert_equal(0, result.MyInt_m);
 	zassert_equal(1, result.uint1bstr.len);
 	zassert_equal(2, result.uint1bstr.value[0]);
+}
+
+
+ZTEST(cbor_decode_test5, test_nested_choices)
+{
+	uint8_t nested_choices_payload1[] = {0xf6};
+	uint8_t nested_choices_payload2[] = {LIST(2),
+			LIST(1), 0x65, 'h', 'e', 'l', 'l', 'o', END
+			LIST(1), 0x65, 'w', 'o', 'r', 'l', 'd', END
+		END
+	};
+	uint8_t nested_choices_payload3[] = {LIST(3),
+			LIST(1), 0x65, 'h', 'e', 'l', 'l', 'o', END
+			0xf6,
+			LIST(1), 0x65, 'w', 'o', 'r', 'l', 'd', END
+		END
+	};
+	uint8_t nested_choices_payload4[] = {LIST(2),
+			LIST(1), LIST(1),
+				LIST(3),
+					LIST(1), 0x65, 'h', 'e', 'l', 'l', 'o', END
+					0xf6,
+					LIST(1), 0x65, 'w', 'o', 'r', 'l', 'd', END
+				END
+			END END
+			0xf6,
+		END
+	};
+	uint8_t nested_choices_payload5[] = {LIST(2),
+			MAP(2),
+				0, LIST(1), 0x65, 'h', 'e', 'l', 'l', 'o', END
+				1, LIST(1), 0x65, 'w', 'o', 'r', 'l', 'd', END
+			END
+			0xf6,
+		END
+	};
+	struct Choice1_r result1;
+	struct Choice2_r result2;
+	struct Choice3_r result3;
+	struct Choice4_r result4;
+	struct Choice5_r result5;
+
+	size_t num_decode;
+
+	zassert_equal(ZCBOR_SUCCESS, cbor_decode_Choice1(nested_choices_payload1,
+		sizeof(nested_choices_payload1), &result1, &num_decode), NULL);
+	zassert_equal(ZCBOR_SUCCESS, cbor_decode_Choice2(nested_choices_payload1,
+		sizeof(nested_choices_payload1), &result2, &num_decode), NULL);
+	zassert_equal(ZCBOR_SUCCESS, cbor_decode_Choice3(nested_choices_payload1,
+		sizeof(nested_choices_payload1), &result3, &num_decode), NULL);
+	zassert_equal(ZCBOR_SUCCESS, cbor_decode_Choice4(nested_choices_payload1,
+		sizeof(nested_choices_payload1), &result4, &num_decode), NULL);
+	zassert_equal(ZCBOR_SUCCESS, cbor_decode_Choice5(nested_choices_payload1,
+		sizeof(nested_choices_payload1), &result5, &num_decode), NULL);
+	zassert_equal(result1.Choice1_choice, Choice1_nil_c);
+	zassert_equal(result2.Choice2_choice, Choice2_nil_c);
+	zassert_equal(result3.Choice3_choice, Choice3_nil_c);
+	zassert_equal(result4.Choice4_choice, Choice4_nil_c);
+	zassert_equal(result5.Choice5_choice, Choice5_nil_c);
+
+	zassert_equal(ZCBOR_SUCCESS, cbor_decode_Choice1(nested_choices_payload2,
+		sizeof(nested_choices_payload2), &result1, &num_decode), NULL);
+	zassert_equal(ZCBOR_SUCCESS, cbor_decode_Choice2(nested_choices_payload2,
+		sizeof(nested_choices_payload2), &result2, &num_decode), NULL);
+	zassert_equal(ZCBOR_SUCCESS, cbor_decode_Choice3(nested_choices_payload2,
+		sizeof(nested_choices_payload2), &result3, &num_decode), NULL);
+
+	zassert_equal(result1.Choice1_choice, Choice1_tstr_l_l_c);
+	zassert_equal(result2.Choice2_choice, Choice2_tstr_l_l_c);
+	zassert_equal(result3.Choice3_choice, Choice3_union_l_c);
+
+	zassert_equal(2, result1.tstr_count);
+	zassert_equal(2, result2.tstr_count);
+	zassert_equal(2, result3.Union_count);
+	zassert_equal(result3.Union[0].Union_choice, union_tstr_l_tstr_c);
+	zassert_equal(result3.Union[1].Union_choice, union_tstr_l_tstr_c);
+	zassert_zcbor_string(&result1.tstr[0], "hello", 5);
+	zassert_zcbor_string(&result2.tstr[0], "hello", 5);
+	zassert_zcbor_string(&result3.Union[0].tstr, "hello", 5);
+	zassert_zcbor_string(&result1.tstr[1], "world", 5);
+	zassert_zcbor_string(&result2.tstr[1], "world", 5);
+	zassert_zcbor_string(&result3.Union[1].tstr, "world", 5);
+
+	zassert_equal(ZCBOR_SUCCESS, cbor_decode_Choice3(nested_choices_payload3,
+		sizeof(nested_choices_payload3), &result3, &num_decode), NULL);
+
+	zassert_equal(result3.Choice3_choice, Choice3_union_l_c);
+
+	zassert_equal(3, result3.Union_count);
+	zassert_equal(result3.Union[0].Union_choice, union_tstr_l_tstr_c);
+	zassert_equal(result3.Union[1].Union_choice, Choice3_union_l_union_nil_c);
+	zassert_equal(result3.Union[2].Union_choice, union_tstr_l_tstr_c);
+	zassert_zcbor_string(&result3.Union[0].tstr, "hello", 5);
+	zassert_zcbor_string(&result3.Union[2].tstr, "world", 5);
+
+	zassert_equal(ZCBOR_SUCCESS, cbor_decode_Choice4(nested_choices_payload4,
+		sizeof(nested_choices_payload4), &result4, &num_decode), NULL);
+
+	zassert_equal(result4.Choice4_choice, Choice4_union_l_c);
+	zassert_equal(2, result4.Union_count);
+	zassert_equal(result4.Union_count, 2);
+	zassert_equal(result4.Union[0].Union_choice, Choice3_m_l_l_Choice3_m_l_Choice3_m_c);
+
+	zassert_equal(3, result4.Union[0].Choice3_m.Union_count);
+	zassert_equal(result4.Union[0].Choice3_m.Choice3_choice, Choice3_union_l_c);
+	zassert_equal(result4.Union[0].Choice3_m.Union[0].Union_choice, union_tstr_l_tstr_c);
+	zassert_equal(result4.Union[0].Choice3_m.Union[1].Union_choice, Choice3_union_l_union_nil_c);
+	zassert_equal(result4.Union[0].Choice3_m.Union[2].Union_choice, union_tstr_l_tstr_c);
+	zassert_zcbor_string(&result4.Union[0].Choice3_m.Union[0].tstr, "hello", 5);
+	zassert_zcbor_string(&result4.Union[0].Choice3_m.Union[2].tstr, "world", 5);
+
+	zassert_equal(result4.Union[1].Union_choice, Choice4_union_l_union_nil_c);
+
+	zassert_equal(ZCBOR_SUCCESS, cbor_decode_Choice5(nested_choices_payload5,
+		sizeof(nested_choices_payload5), &result5, &num_decode), NULL);
+
+	zassert_equal(result5.Choice5_choice, Choice5_union_l_c);
+	zassert_equal(2, result5.Union_count);
+	zassert_equal(result5.Union[0].Union_choice, union_map_c);
+	zassert_equal(result5.Union[0].tstr_l_count, 2);
+	zassert_equal(result5.Union[0].tstr_l[0].tstr_l_key, 0);
+	zassert_zcbor_string(&result5.Union[0].tstr_l[0].tstr, "hello", 5);
+	zassert_equal(result5.Union[0].tstr_l[1].tstr_l_key, 1);
+	zassert_zcbor_string(&result5.Union[0].tstr_l[1].tstr, "world", 5);
+	zassert_equal(result5.Union[1].Union_choice, Choice5_union_l_union_nil_c);
+}
+
+
+ZTEST(cbor_decode_test5, test_optlist)
+{
+	uint8_t optlist_payload1[] = {LIST(1),
+			10,
+		END
+	};
+	uint8_t optlist_payload2[] = {LIST(2),
+			11,
+			LIST(1), 0x18, 100, END
+		END
+	};
+	struct OptList result;
+
+	size_t num_decode;
+
+	zassert_equal(ZCBOR_SUCCESS, cbor_decode_OptList(optlist_payload1,
+		sizeof(optlist_payload1), &result, &num_decode));
+
+	zassert_false(result.uint_present);
+	zassert_equal(10, result.optlist_int);
+
+	zassert_equal(ZCBOR_SUCCESS, cbor_decode_OptList(optlist_payload2,
+		sizeof(optlist_payload2), &result, &num_decode));
+
+	zassert_true(result.uint_present);
+	zassert_equal(11, result.optlist_int);
+	zassert_equal(100, result.uint);
 }
 
 
