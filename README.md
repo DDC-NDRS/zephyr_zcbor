@@ -100,7 +100,7 @@ Name                      | Description
 `ZCBOR_CANONICAL`         | Assume canonical encoding (AKA "deterministically encoded CBOR", ch 4.2.1 in RFC8949). When encoding lists and maps, do not use indefinite length encoding. Enabling `ZCBOR_CANONICAL` increases code size and makes the encoding library more often use state backups. When decoding, if `enforce_canonical` is true, ensure that the incoming data conforms to canonical encoding, i.e. no indefinite length encoding, and always using minimal length encoding (e.g. not using 16 bits to encode a value < 256). Enabling `ZCBOR_CANONICAL` changes the default of `enforce_canonical` from `false` to `true` Note: the map ordering constraint in canonical encoding is not checked.
 `ZCBOR_VERBOSE`           | Print log messages on encoding/decoding errors (`zcbor_log()`), and also a trace message (`zcbor_trace()`) for each decoded value, and in each generated function (when using code generation).
 `ZCBOR_ASSERTS`           | Enable asserts (`zcbor_assert()`). When they fail, the assert statements instruct the current function to return a `ZCBOR_ERR_ASSERTION` error. If `ZCBOR_VERBOSE` is enabled, a message is printed.
-`ZCBOR_STOP_ON_ERROR`     | Enable the `stop_on_error` functionality. This makes all functions abort their execution if called when an error has already happened.
+`ZCBOR_STOP_ON_ERROR`     | Enable the `stop_on_error` functionality. Note that it also has to be enabled in the state variable (`state->constant_state->stop_on_error`). This makes all zcbor functions abort their execution if called when an error has already happened.
 `ZCBOR_BIG_ENDIAN`        | All decoded values are returned as big-endian. The default is little-endian.
 `ZCBOR_MAP_SMART_SEARCH`  | Applies to decoding of unordered maps. When enabled, a flag is kept for each element in an array, ensuring it is not processed twice. If disabled, a count is kept for map as a whole. Enabling increases code size and memory usage, and requires the state variable to possess the memory necessary for the flags.
 
@@ -323,6 +323,24 @@ The label is only for readability and does not impact the data structure in any 
 E.g. `Foo = [name: tstr, age: uint]` is equivalent to `Foo = [tstr, uint]`.
 
 See [pet.cddl](tests/cases/pet.cddl) for CDDL example code.
+
+Unsupported CDDL features
+-------------------------
+
+Not all features outlined in the CDDL specs [RFC8610](https://datatracker.ietf.org/doc/html/rfc8610), [RFC9090](https://datatracker.ietf.org/doc/html/rfc9090), and [RFC9165](https://datatracker.ietf.org/doc/html/rfc9165) are supported by zcbor.
+The following is a list of limitations and missing features:
+
+ * Generated code does not support unordered maps.
+ * Using `&()` to turn groups into choices (unions). `&()` is supported when used with `.bits`.
+ * Representation Types (`#x.y`), except for tags (`#6.y(foo)`) which are supported.
+ * Unwrapping (`~`)
+ * The control operators `.regexp`, `.ne`, `.default`, and `.within` from RFC8610.
+ * The control operators `.sdnv`, `.sdnvseq`, and `.oid` from RFC9090.
+ * The control operators `.plus`, `.cat`, `.det`, `.abnf`, `.abnfb`, and `.feature` from RFC9165.
+ * Generics (`foo<a, b>`).
+ * Using `:` for map keys.
+ * Cuts, either via `^` or implicitly via `:`.
+ * Most of the "Extended Diagnostic Notation" is unsupported.
 
 
 Introduction to CBOR

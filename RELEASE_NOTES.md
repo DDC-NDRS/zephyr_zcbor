@@ -1,3 +1,21 @@
+# zcbor v. 0.9.1 (2024-10-17)
+
+Any new bugs, requests, or missing features should be reported as [Github issues](https://github.com/NordicSemiconductor/zcbor/issues).
+
+## Improvements:
+
+ * README improvements:
+   * pypi_README.md: Add separate README for use in the pypi package
+   * README: Clarify what ZCBOR_STOP_ON_ERROR does
+   * RELEASE_NOTES.md: Move "Unsupported CDDL features" to the README
+
+## Bugfixes:
+
+## Unsupported CDDL features
+
+This section has been moved to the README, and this heading will be removed in subsequent releases.
+
+
 # zcbor v. 0.9.0 (2024-08-27)
 
 Any new bugs, requests, or missing features should be reported as [Github issues](https://github.com/NordicSemiconductor/zcbor/issues).
