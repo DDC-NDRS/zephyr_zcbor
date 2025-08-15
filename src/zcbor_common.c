@@ -427,7 +427,7 @@ uint16_t zcbor_float32_to_16(float input)
 	return value16;
 }
 
-
+#if !defined(_MSC_VER) /* #CUSTOM@NDRS */
 /** Weak strnlen() implementation in case it is not available.
  *
  * This function is in the public domain, according to:
@@ -445,3 +445,4 @@ size_t strnlen (const char *s, size_t maxlen)
 	}
 	return i;
 }
+#endif

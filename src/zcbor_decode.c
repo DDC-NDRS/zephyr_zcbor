@@ -808,8 +808,9 @@ static bool map_restart(zcbor_state_t *state)
 	return true;
 }
 
-
+#if !defined(_MSC_VER) /* #CUSTOM@NDRS */
 __attribute__((used))
+#endif
 static size_t get_current_index(zcbor_state_t *state, uint32_t index_offset)
 {
 	/* Subtract mode because for GET, you want the index you are pointing to, while for SET,
