@@ -1251,6 +1251,10 @@ bool zcbor_float16_decode(zcbor_state_t *state, float *result)
 }
 
 
+// The float *_expect functions match an exact encoded value on purpose (NaN never matches)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wfloat-equal"
+
 bool zcbor_float16_expect(zcbor_state_t *state, float expected)
 {
 	PRINT_FUNC();
@@ -1368,6 +1372,7 @@ bool zcbor_float64_expect(zcbor_state_t *state, double expected)
 	return true;
 }
 
+#pragma GCC diagnostic pop
 
 bool zcbor_float64_pexpect(zcbor_state_t *state, double *expected)
 {
@@ -1606,7 +1611,7 @@ bool zcbor_present_decode(bool *present,
 
 void zcbor_new_decode_state(zcbor_state_t *state_array, size_t n_states,
 		const uint8_t *payload, size_t payload_len, size_t elem_count,
-		uint8_t *flags, size_t flags_bytes)
+		uint8_t *elem_state, size_t elem_state_bytes)
 {
-	zcbor_new_state(state_array, n_states, payload, payload_len, elem_count, flags, flags_bytes);
+	zcbor_new_state(state_array, n_states, payload, payload_len, elem_count, elem_state, elem_state_bytes);
 }
